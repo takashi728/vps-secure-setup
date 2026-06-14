@@ -96,7 +96,7 @@ log_info "Updating system packages and installing dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get upgrade -y
-apt-get install -y sudo ufw fail2ban curl openssh-server
+apt-get install -y sudo fail2ban curl openssh-server
 
 # ------------------------------------------------------------------------------
 # 3. Create User & Configure Sudo
@@ -244,15 +244,9 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 7. Configure UFW Firewall & Fail2ban
+# 7. Configure Fail2ban
 # ------------------------------------------------------------------------------
-log_info "Configuring Firewall (UFW) and Fail2ban..."
-
-# Allow SSH
-ufw allow 22/tcp comment 'SSH Port'
-# Enable UFW without prompting
-ufw --force enable
-log_success "UFW firewall enabled and allowing SSH on port 22."
+log_info "Configuring Fail2ban..."
 
 # Setup Fail2ban jail config for SSH
 FAIL2BAN_LOCAL="/etc/fail2ban/jail.local"

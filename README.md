@@ -11,8 +11,7 @@ This project contains a comprehensive shell script (`setup.sh`) to automate the 
    - Disables SSH login for the `root` user (`PermitRootLogin no`).
    - Disables SSH password authentication (`PasswordAuthentication no`), enforcing key-only authentication.
    - Disables keyboard-interactive authentication.
-5. **Firewall & Intrusion Protection**:
-   - Configures UFW (Uncomplicated Firewall) to block all incoming traffic except SSH (port 22).
+5. **Intrusion Protection**:
    - Installs and configures `fail2ban` to automatically ban IPs showing suspicious brute-force SSH behaviors.
 6. **Hostname Configuration**: Updates the VPS hostname and `/etc/hosts` to use a domain name of your choice.
 7. **Connection Guide Output**: Provides copy-pasteable client-side configuration blocks for your local `~/.ssh/config`.
