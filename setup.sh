@@ -57,7 +57,7 @@ generate_pass=${generate_pass:-y}
 if [[ "$generate_pass" =~ ^[yY](es)?$ ]]; then
     # Generate a strong 20-character password using openssl or /dev/urandom
     if command -v openssl >/dev/null 2>&1; then
-        password=$(openssl rand -base64 15 | tr -d '+/=' | head -c 20)
+        password=$(openssl rand -base64 24 | tr -d '+/=' | head -c 20)
     else
         password=$(tr -dc 'A-Za-z0-9!@#%^*(-+=' < /dev/urandom | head -c 20)
     fi
@@ -180,7 +180,6 @@ if [[ -n "$domain_name" ]]; then
     # Update /etc/hosts
     if ! grep -q "$domain_name" /etc/hosts; then
         echo "127.0.1.1  $domain_name $(echo "$domain_name" | cut -d. -f1)" >> /etc/hosts
-        echo "127.0.0.1  localhost" >> /etc/hosts
     fi
     log_success "Hostname set to '$domain_name'."
 fi
@@ -199,15 +198,23 @@ log_info "Backup of sshd_config created at $SSHD_CONFIG_BAK"
 update_sshd_config() {
     local key=$1
     local value=$2
-    # Check if the key exists (commented or uncommented)
+    # Update main config
     if grep -qE "^#?\s*$key\s+" "$SSHD_CONFIG"; then
-        # Replace the line
         sed -i -E "s/^#?\s*$key\s+.*/$key $value/" "$SSHD_CONFIG"
     else
-        # Append to file
         echo "$key $value" >> "$SSHD_CONFIG"
     fi
+    
+    # Write to 00-secure.conf to override any cloud-init includes that load first
+    if [[ -d "/etc/ssh/sshd_config.d" ]]; then
+        echo "$key $value" >> /etc/ssh/sshd_config.d/00-secure.conf
+    fi
 }
+
+# Clear previous secure conf if it exists
+if [[ -f "/etc/ssh/sshd_config.d/00-secure.conf" ]]; then
+    rm /etc/ssh/sshd_config.d/00-secure.conf
+fi
 
 # Apply sshd hardening rules
 update_sshd_config "PermitRootLogin" "no"
@@ -255,7 +262,7 @@ if [[ ! -f "$FAIL2BAN_LOCAL" ]]; then
 enabled = true
 port = ssh
 filter = sshd
-logpath = /var/log/auth.log
+# Inherits logpath/backend from jail.conf defaults correctly for OS
 maxretry = 5
 bantime = 1h
 findtime = 10m
