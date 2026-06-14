@@ -1,107 +1,93 @@
-# Secure VPS Setup Guide
+<h1 align="center">🛡️ Secure VPS Setup</h1>
 
-This project contains a comprehensive shell script (`setup.sh`) to automate the initial setup and security hardening of a fresh Linux VPS (Ubuntu/Debian).
+<p align="center">
+  <strong>Automated initialization and security hardening for fresh Linux VPS instances.</strong>
+</p>
 
-## What the Script Does
-
-1. **System Updates**: Updates package lists and upgrades existing packages.
-2. **User Creation**: Creates a new, secure non-root user with `sudo` administrative privileges.
-3. **SSH Key Migration**: Automatically copies the root user's authorized SSH keys to the new user, ensuring you use the same secure key to log in.
-4. **SSH Hardening**:
-   - Disables SSH login for the `root` user (`PermitRootLogin no`).
-   - Disables SSH password authentication (`PasswordAuthentication no`), enforcing key-only authentication.
-   - Disables keyboard-interactive authentication.
-5. **Intrusion Protection**:
-   - Installs and configures `fail2ban` to automatically ban IPs showing suspicious brute-force SSH behaviors.
-6. **Hostname Configuration**: Updates the VPS hostname and `/etc/hosts` to use a domain name of your choice.
-7. **Connection Guide Output**: Provides copy-pasteable client-side configuration blocks for your local `~/.ssh/config`.
+<p align="center">
+  <img src="https://img.shields.io/badge/OS-Ubuntu%20%7C%20Debian-blue?style=flat-square&logo=linux" alt="Supported OS">
+  <img src="https://img.shields.io/badge/Shell-Bash-green?style=flat-square&logo=gnu-bash" alt="Shell">
+</p>
 
 ---
 
-## Step-by-Step Instructions
+## ✨ Features
 
-### Step 1: Point Your Domain's DNS (Optional but Recommended)
-To log in using a domain name like `ssh -i ./pky user@this.vps.host`:
-1. Log in to your domain registrar or DNS hosting provider (e.g., Cloudflare, Namecheap, GoDaddy).
-2. Create or update an **A Record**:
-   - **Host/Name**: `@` (for main domain) or a subdomain (e.g., `vps`, `this.vps.host`).
-   - **Value/IP**: The public IP address of your VPS.
-   - **TTL**: Auto or 3600 (1 hour).
+This script provides a production-ready baseline for any new server by automating the following:
 
-### Step 2: Upload the Script to Your VPS
-From your **local machine**, run `scp` to copy the setup script to the root directory of your VPS:
+- 📦 **System Updates**: Automatically updates and upgrades system packages.
+- 👤 **Secure User Creation**: Generates a cryptographically secure 20-character password and provisions a non-root user with `sudo` access.
+- 🔑 **Seamless SSH Key Migration**: Copies your `root` SSH authorized keys directly to the new user.
+- 🔒 **SSH Hardening**: Disables `root` SSH logins, disables password-based authentication, and enforces key-only access to prevent brute-force attacks.
+- 🛡️ **Intrusion Protection**: Configures `fail2ban` to automatically jail IPs exhibiting malicious SSH brute-force behavior.
+- 🌐 **Domain & Hostname Config**: Automatically binds your chosen domain name to the VPS hostname.
+
+---
+
+## 🚀 Quick Start
+
+### 1. Execute on your VPS
+
+Run the following command as `root` on your fresh VPS. You can download and run it directly:
 
 ```bash
-# Replace <vps-ip> with your actual VPS IP address
-# Replace /path/to/private_key with the path to the SSH private key you use to log in as root
-scp -i /path/to/private_key ./setup.sh root@<vps-ip>:/root/setup.sh
-```
-
-*Alternative (if you don't want to copy via SCP)*:
-SSH into your VPS as root and download it directly or copy-paste the contents:
-```bash
+# SSH into your server as root
 ssh root@<vps-ip>
-nano setup.sh # paste the script contents, save and exit
+
+# Download and execute
+curl -sO https://raw.githubusercontent.com/takashi728/vps-secure-setup/main/setup.sh
+chmod +x setup.sh
+./setup.sh
 ```
 
-### Step 3: Run the Script on Your VPS
-1. SSH into the VPS as root:
-   ```bash
-   ssh root@<vps-ip>
-   ```
-2. Make the script executable and run it:
-   ```bash
-   chmod +x /root/setup.sh
-   /root/setup.sh
-   ```
-3. Follow the interactive prompts:
-   - **Username**: Choose the new username (default is `vpsadmin`).
-   - **Password Option**: Choose whether to auto-generate a secure 20-character password (highly recommended) or enter a custom one.
-   - **Domain**: Enter your domain name (e.g., `this.vps.host`) if you set one up in Step 1. Leave blank if you only want to use the IP address.
+### 2. Follow the Prompts
+The interactive script will ask you to:
+1. Provide a **username** (defaults to `vpsadmin`).
+2. Auto-generate a **secure password** or enter your own.
+3. Provide a **domain name** (optional).
 
-### Step 4: Keep the Root Session Open & Verify!
-> [!IMPORTANT]
-> **CRITICAL**: Do **NOT** close your active root SSH session. If there was a misconfiguration, closing this session will lock you out permanently.
+### 3. Verify Connection (CRITICAL ⚠️)
 
-1. Open a **new terminal window** on your local machine.
-2. Test connecting to your new user using the new configuration.
+> **IMPORTANT:** Do **NOT** close your active root SSH session immediately! If there is a configuration error, closing the session may lock you out of your server permanently.
 
-**To connect via Domain Name:**
+Open a **new terminal window** on your local machine and verify you can connect as the new user:
+
 ```bash
-ssh -i /path/to/private_key user@this.vps.host
+# Connect via IP
+ssh -i /path/to/private_key new_username@<vps-ip>
+
+# OR Connect via Domain (if DNS is configured)
+ssh -i /path/to/private_key new_username@yourdomain.com
 ```
 
-**To connect via IP Address:**
+Once logged in, verify `sudo` access:
 ```bash
-ssh -i /path/to/private_key user@<vps-ip>
+sudo -i
 ```
-
-3. Once connected as the new user, verify you have administrative (sudo) privileges by running:
-   ```bash
-   sudo -i
-   ```
-   *(Enter the password that was displayed at the end of the setup script when prompted)*
-4. If you can successfully log in and access root using `sudo -i`, you are safe! You can now close both terminal windows.
+*(Enter the password provided by the script).* Once successful, it is safe to close your original root session.
 
 ---
 
-## Setting Up Quick Local SSH Access
+## 💻 Local SSH Configuration (Bonus)
 
-To avoid typing the long SSH commands every time, you can add a shortcut configuration to your local machine.
+To avoid typing long SSH commands every time, you can add a shortcut to your local machine's SSH config.
 
-1. On your **local machine**, open or create the SSH config file:
-   ```bash
-   nano ~/.ssh/config
-   ```
-2. Add the following block (replace placeholder values):
-   ```ssh
-   Host my-vps
-       HostName this.vps.host   # or use the VPS IP address
-       User vpsadmin            # the username you created
-       IdentityFile ~/.ssh/id_rsa  # path to your private key on local machine
-   ```
-3. Save and close the file.
-4. Now you can connect to your VPS simply by running:
-   ```bash
-   ssh my-vps
-   ```
+Add this block to your `~/.ssh/config` file:
+
+```ssh
+Host my-vps
+    HostName <vps-ip-or-domain>
+    User <new_username>
+    IdentityFile ~/.ssh/id_rsa  # Update with your actual private key path
+```
+
+Now you can connect simply by typing:
+```bash
+ssh my-vps
+```
+
+---
+
+<p align="center">
+  <i>Built with security and simplicity in mind.</i>
+</p>
