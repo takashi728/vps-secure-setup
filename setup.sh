@@ -155,12 +155,11 @@ cp "$SSHD_CONFIG" "$SSHD_CONFIG_BAK"
 log_info "Backup created at ${SSHD_CONFIG_BAK}"
 
 # Use a drop-in override file to avoid fighting with cloud-init defaults.
-# This takes precedence because it is named 00-secure.conf.
+# Named 00-secure.conf so it loads first and takes precedence.
 DROPIN_DIR="/etc/ssh/sshd_config.d"
 DROPIN_FILE="${DROPIN_DIR}/00-secure.conf"
 
 if [[ -d "$DROPIN_DIR" ]]; then
-    # Write a clean drop-in file (overwrite any stale version)
     cat > "$DROPIN_FILE" <<'EOF'
 # Managed by vps-secure-setup — do not edit manually.
 PermitRootLogin no
@@ -215,7 +214,7 @@ systemctl restart fail2ban
 log_success "fail2ban enabled and started (default config)."
 
 # ------------------------------------------------------------------------------
-# 7. Save credentials to a root-only file
+# 7. Save credentials to a root-only file (backup reference)
 # ------------------------------------------------------------------------------
 CREDS_FILE="/root/.vps-setup-credentials"
 cat > "$CREDS_FILE" <<EOF
@@ -230,12 +229,16 @@ chmod 600 "$CREDS_FILE"
 # 8. Done — print connection guide
 # ------------------------------------------------------------------------------
 echo
-echo "--------------------------------------------------"
+echo "=================================================="
 log_success "Secure VPS setup complete!"
-echo "--------------------------------------------------"
-echo -e "${YELLOW}Credentials saved to: ${GREEN}${CREDS_FILE}${NC} (root-readable only)"
-echo -e "Username : ${GREEN}${username}${NC}"
-echo -e "VPS IP   : ${GREEN}${VPS_IP}${NC}"
+echo "=================================================="
+echo -e "  Username : ${GREEN}${username}${NC}"
+echo -e "  Password : ${GREEN}${password}${NC}"
+echo -e "  VPS IP   : ${GREEN}${VPS_IP}${NC}"
+echo
+echo -e "${YELLOW}⚠  Copy the password above — you will need it to run sudo commands.${NC}"
+echo -e "   It is also saved to ${GREEN}${CREDS_FILE}${NC} (root-readable only, as a backup)."
+echo "=================================================="
 echo
 echo -e "${BLUE}=== How to connect ===${NC}"
 echo -e "  ${GREEN}ssh -i /path/to/private_key ${username}@${VPS_IP}${NC}"
@@ -250,6 +253,6 @@ EOF
 echo
 echo -e "${RED}⚠  WARNING:${NC} ${YELLOW}Do NOT close this root session yet!${NC}"
 echo    "  1. Open a new terminal and test: ssh -i /path/to/key ${username}@${VPS_IP}"
-echo    "  2. Verify sudo works: sudo -i"
+echo    "  2. Verify sudo works: sudo -i  (enter the password above)"
 echo    "  3. Only close this session once you have confirmed access."
-echo "--------------------------------------------------"
+echo "=================================================="
