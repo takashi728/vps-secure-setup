@@ -2,314 +2,254 @@
 
 # ==============================================================================
 # Secure VPS Setup Script
-# Works on Debian, Ubuntu, and derivatives.
+# Tested on Debian, Ubuntu, and derivatives.
 # Must be executed as root.
+#
+# Workflow assumption:
+#   1. SSH into VPS as root using your SSH key.
+#   2. Run: apt-get update && apt-get dist-upgrade -y && reboot
+#   3. SSH back in as root, then run this script.
+#
+# What this script does:
+#   - Creates a non-root sudo user with a cryptographically secure password.
+#   - Copies root's authorized_keys to the new user (same SSH key works).
+#   - Hardens SSH: disables root login and password authentication.
+#   - Installs and enables fail2ban with its default configuration.
 # ==============================================================================
 
 set -euo pipefail
 
-# Color codes for output
+# ------------------------------------------------------------------------------
+# Color helpers
+# ------------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Helper functions for logs
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_info()    { echo -e "${BLUE}[INFO]${NC}    $1"; }
+log_success() { echo -e "${GREEN}[OK]${NC}      $1"; }
+log_warning() { echo -e "${YELLOW}[WARN]${NC}    $1"; }
+log_error()   { echo -e "${RED}[ERROR]${NC}   $1"; }
 
-# Check if script is run as root
+# ------------------------------------------------------------------------------
+# Root check
+# ------------------------------------------------------------------------------
 if [[ $EUID -ne 0 ]]; then
-    log_error "This script must be run as root. Please run with sudo or as root user."
+    log_error "This script must be run as root."
     exit 1
 fi
 
-# Detect system IP
-VPS_IP=$(curl -s --max-time 5 https://icanhazip.com || curl -s --max-time 5 https://api.ipify.org || echo "YOUR_VPS_IP")
+# ------------------------------------------------------------------------------
+# Detect VPS public IP
+# ------------------------------------------------------------------------------
+VPS_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null \
+      || curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
+      || true)
 
+if [[ -z "$VPS_IP" ]]; then
+    log_warning "Could not detect public IP. You will need to fill it in manually."
+    VPS_IP="<YOUR_VPS_IP>"
+fi
+
+echo
 log_info "Starting Secure VPS Setup..."
 echo "--------------------------------------------------"
 
 # ------------------------------------------------------------------------------
-# 1. Gather User Inputs
+# 1. Gather username
 # ------------------------------------------------------------------------------
-echo -e "${YELLOW}--- Configuration ---${NC}"
-
-# Username selection
 default_user="vpsadmin"
-read -rp "Enter new username [default: $default_user]: " username
+read -rp "Enter new sudo username [default: ${default_user}]: " username
 username=${username:-$default_user}
 
-# Validate username
 if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-    log_error "Invalid username. Must start with a lowercase letter or underscore, followed by lowercase letters, numbers, hyphens, or underscores."
+    log_error "Invalid username. Must start with a lowercase letter or underscore."
     exit 1
 fi
-
-# Password configuration
-generate_pass="y"
-read -rp "Would you like to automatically generate a secure password? (y/n) [default: y]: " generate_pass
-generate_pass=${generate_pass:-y}
-
-if [[ "$generate_pass" =~ ^[yY](es)?$ ]]; then
-    # Generate a strong 20-character password using openssl or /dev/urandom
-    if command -v openssl >/dev/null 2>&1; then
-        password=$(openssl rand -base64 24 | tr -d '+/=' | head -c 20)
-    else
-        password=$(tr -dc 'A-Za-z0-9!@#%^*(-+=' < /dev/urandom | head -c 20)
-    fi
-else
-    # Prompt for password (masked input)
-    while true; do
-        read -rsp "Enter password for $username: " password
-        echo
-        read -rsp "Confirm password: " password_confirm
-        echo
-        if [[ "$password" == "$password_confirm" ]]; then
-            if [[ ${#password} -lt 12 ]]; then
-                log_warning "Password is short (${#password} chars). A minimum of 12 characters is recommended."
-                read -rp "Use it anyway? (y/n): " use_short
-                if [[ "$use_short" =~ ^[yY](es)?$ ]]; then
-                    break
-                fi
-            else
-                break
-            fi
-        else
-            log_error "Passwords do not match. Try again."
-        fi
-    done
-fi
-
-# Domain / Hostname setup
-read -rp "Enter your domain name (e.g., this.vps.host) [leave empty to skip]: " domain_name
 
 echo "--------------------------------------------------"
 
 # ------------------------------------------------------------------------------
-# 2. System Update & Dependencies
+# 2. System packages
 # ------------------------------------------------------------------------------
-log_info "Updating system packages and installing dependencies..."
+log_info "Installing required packages..."
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get upgrade -y
-apt-get install -y sudo fail2ban curl openssh-server
+apt-get update -qq
+apt-get install -y --no-install-recommends sudo fail2ban curl openssh-server
+log_success "Packages installed."
 
 # ------------------------------------------------------------------------------
-# 3. Create User & Configure Sudo
+# 3. Create user and assign sudo
 # ------------------------------------------------------------------------------
-log_info "Creating user '$username'..."
+log_info "Setting up user '${username}'..."
 
-# Create the user if they don't exist
-if id "$username" >/dev/null 2>&1; then
-    log_warning "User '$username' already exists. Updating password and sudo privileges."
+if id "$username" &>/dev/null; then
+    log_warning "User '${username}' already exists. Updating password and sudo group."
 else
     useradd -m -s /bin/bash "$username"
-    log_success "User '$username' created."
+    log_success "User '${username}' created."
 fi
 
-# Set password
-echo "$username:$password" | chpasswd
-log_success "Password set for '$username'."
+# Generate a cryptographically secure 20-character alphanumeric password
+password=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 20)
+if [[ ${#password} -lt 20 ]]; then
+    log_error "Password generation failed."
+    exit 1
+fi
+
+# Set password securely (avoids exposing it in process list)
+chpasswd <<< "${username}:${password}"
+log_success "Secure password set for '${username}'."
 
 # Add to sudo group
-if getent group sudo >/dev/null; then
+if getent group sudo &>/dev/null; then
     usermod -aG sudo "$username"
-    log_success "Added '$username' to group 'sudo'."
-elif getent group wheel >/dev/null; then
+elif getent group wheel &>/dev/null; then
     usermod -aG wheel "$username"
-    log_success "Added '$username' to group 'wheel'."
 else
-    log_warning "Neither 'sudo' nor 'wheel' group found. Creating 'sudo' group."
     groupadd sudo
     usermod -aG sudo "$username"
 fi
+log_success "'${username}' added to sudo group."
 
 # ------------------------------------------------------------------------------
-# 4. Copy SSH Authorized Keys
+# 4. Copy root SSH authorized_keys to new user
 # ------------------------------------------------------------------------------
-log_info "Migrating SSH keys..."
+log_info "Migrating root SSH keys to '${username}'..."
 
-user_home=$(eval echo "~$username")
-user_ssh_dir="$user_home/.ssh"
+user_home=$(eval echo "~${username}")
+user_ssh_dir="${user_home}/.ssh"
 root_auth_keys="/root/.ssh/authorized_keys"
 
 mkdir -p "$user_ssh_dir"
 
 if [[ -f "$root_auth_keys" ]]; then
-    cp "$root_auth_keys" "$user_ssh_dir/authorized_keys"
-    log_success "Successfully copied root authorized keys to '$username'."
+    cp "$root_auth_keys" "${user_ssh_dir}/authorized_keys"
+    log_success "Root authorized_keys copied to '${username}'."
 else
-    log_warning "No root SSH keys found at $root_auth_keys."
-    read -rp "Would you like to manually paste a public key for '$username'? (y/n) [default: n]: " add_key_manual
-    add_key_manual=${add_key_manual:-n}
-    if [[ "$add_key_manual" =~ ^[yY](es)?$ ]]; then
-        read -rp "Paste your public SSH key (starting with ssh-rsa, ssh-ed25519, etc.): " pub_key
-        echo "$pub_key" > "$user_ssh_dir/authorized_keys"
+    log_warning "No authorized_keys found at ${root_auth_keys}."
+    read -rp "Paste a public SSH key for '${username}' (leave empty to skip): " pub_key
+    if [[ -n "$pub_key" ]]; then
+        echo "$pub_key" > "${user_ssh_dir}/authorized_keys"
         log_success "Public key written."
     else
-        log_warning "Continuing without adding SSH keys. Note: You will need password auth enabled until you add a key!"
+        log_warning "No SSH key added. You must add one manually before locking down SSH."
     fi
 fi
 
-# Set strict permissions
 chmod 700 "$user_ssh_dir"
-if [[ -f "$user_ssh_dir/authorized_keys" ]]; then
-    chmod 600 "$user_ssh_dir/authorized_keys"
-fi
-chown -R "$username:$username" "$user_ssh_dir"
-log_success "Set correct ownership and permissions for '$username/.ssh'."
+[[ -f "${user_ssh_dir}/authorized_keys" ]] && chmod 600 "${user_ssh_dir}/authorized_keys"
+chown -R "${username}:${username}" "$user_ssh_dir"
+log_success "SSH directory permissions set for '${username}'."
 
 # ------------------------------------------------------------------------------
-# 5. Hostname & Domain Configuration
-# ------------------------------------------------------------------------------
-if [[ -n "$domain_name" ]]; then
-    log_info "Setting hostname to '$domain_name'..."
-    
-    # Set hostname
-    if command -v hostnamectl >/dev/null 2>&1; then
-        hostnamectl set-hostname "$domain_name"
-    else
-        echo "$domain_name" > /etc/hostname
-        hostname "$domain_name"
-    fi
-    
-    # Update /etc/hosts
-    if ! grep -q "$domain_name" /etc/hosts; then
-        echo "127.0.1.1  $domain_name $(echo "$domain_name" | cut -d. -f1)" >> /etc/hosts
-    fi
-    log_success "Hostname set to '$domain_name'."
-fi
-
-# ------------------------------------------------------------------------------
-# 6. Secure SSH Configuration
+# 5. Harden SSH configuration
 # ------------------------------------------------------------------------------
 log_info "Hardening SSH configuration..."
 
 SSHD_CONFIG="/etc/ssh/sshd_config"
-SSHD_CONFIG_BAK="$SSHD_CONFIG.bak.$(date +%F_%T)"
+SSHD_CONFIG_BAK="${SSHD_CONFIG}.bak.$(date +%F_%T)"
 cp "$SSHD_CONFIG" "$SSHD_CONFIG_BAK"
-log_info "Backup of sshd_config created at $SSHD_CONFIG_BAK"
+log_info "Backup created at ${SSHD_CONFIG_BAK}"
 
-# Replace config values safely or append if they don't exist
-update_sshd_config() {
-    local key=$1
-    local value=$2
-    # Update main config
-    if grep -qE "^#?\s*$key\s+" "$SSHD_CONFIG"; then
-        sed -i -E "s/^#?\s*$key\s+.*/$key $value/" "$SSHD_CONFIG"
-    else
-        echo "$key $value" >> "$SSHD_CONFIG"
-    fi
-    
-    # Write to 00-secure.conf to override any cloud-init includes that load first
-    if [[ -d "/etc/ssh/sshd_config.d" ]]; then
-        echo "$key $value" >> /etc/ssh/sshd_config.d/00-secure.conf
-    fi
-}
+# Use a drop-in override file to avoid fighting with cloud-init defaults.
+# This takes precedence because it is named 00-secure.conf.
+DROPIN_DIR="/etc/ssh/sshd_config.d"
+DROPIN_FILE="${DROPIN_DIR}/00-secure.conf"
 
-# Clear previous secure conf if it exists
-if [[ -f "/etc/ssh/sshd_config.d/00-secure.conf" ]]; then
-    rm /etc/ssh/sshd_config.d/00-secure.conf
+if [[ -d "$DROPIN_DIR" ]]; then
+    # Write a clean drop-in file (overwrite any stale version)
+    cat > "$DROPIN_FILE" <<'EOF'
+# Managed by vps-secure-setup — do not edit manually.
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+ChallengeResponseAuthentication no
+KbdInteractiveAuthentication no
+EOF
+    log_success "SSH drop-in config written to ${DROPIN_FILE}."
+else
+    # No drop-in support; patch sshd_config directly
+    patch_sshd() {
+        local key="$1" value="$2"
+        if grep -qE "^#?\s*${key}\s+" "$SSHD_CONFIG"; then
+            sed -i -E "s|^#?\s*${key}\s+.*|${key} ${value}|" "$SSHD_CONFIG"
+        else
+            echo "${key} ${value}" >> "$SSHD_CONFIG"
+        fi
+    }
+    patch_sshd "PermitRootLogin"              "no"
+    patch_sshd "PasswordAuthentication"       "no"
+    patch_sshd "PubkeyAuthentication"         "yes"
+    patch_sshd "ChallengeResponseAuthentication" "no"
+    patch_sshd "KbdInteractiveAuthentication" "no"
+    log_success "SSH settings patched directly in ${SSHD_CONFIG}."
 fi
 
-# Apply sshd hardening rules
-update_sshd_config "PermitRootLogin" "no"
-update_sshd_config "PasswordAuthentication" "no"
-update_sshd_config "PubkeyAuthentication" "yes"
-update_sshd_config "ChallengeResponseAuthentication" "no"
-update_sshd_config "KbdInteractiveAuthentication" "no"
-
-# Validate SSH configuration before restarting
+# Validate and reload SSH
 if sshd -t; then
     log_success "SSH configuration is valid."
-    # Restart SSH service
-    if systemctl is-active ssh >/dev/null 2>&1; then
+    if systemctl is-active --quiet ssh 2>/dev/null; then
         systemctl reload ssh
-        log_success "SSH service reloaded."
-    elif systemctl is-active sshd >/dev/null 2>&1; then
+    elif systemctl is-active --quiet sshd 2>/dev/null; then
         systemctl reload sshd
-        log_success "SSHD service reloaded."
     else
-        service ssh reload || service sshd reload
-        log_success "SSH service reloaded (fallback service manager)."
+        service ssh reload 2>/dev/null || service sshd reload
     fi
+    log_success "SSH service reloaded."
 else
-    log_error "SSH configuration validation failed! Restoring backup config."
+    log_error "SSH config validation failed! Restoring backup."
     cp "$SSHD_CONFIG_BAK" "$SSHD_CONFIG"
+    [[ -f "$DROPIN_FILE" ]] && rm -f "$DROPIN_FILE"
     exit 1
 fi
 
 # ------------------------------------------------------------------------------
-# 7. Configure Fail2ban
+# 6. Enable fail2ban with default configuration
 # ------------------------------------------------------------------------------
-log_info "Configuring Fail2ban..."
+log_info "Enabling fail2ban..."
+systemctl enable fail2ban
+systemctl restart fail2ban
+log_success "fail2ban enabled and started (default config)."
 
-# Setup Fail2ban jail config for SSH
-FAIL2BAN_LOCAL="/etc/fail2ban/jail.local"
-if [[ ! -f "$FAIL2BAN_LOCAL" ]]; then
-    cat <<EOF > "$FAIL2BAN_LOCAL"
-[sshd]
-enabled = true
-port = ssh
-filter = sshd
-# Inherits logpath/backend from jail.conf defaults correctly for OS
-maxretry = 5
-bantime = 1h
-findtime = 10m
+# ------------------------------------------------------------------------------
+# 7. Save credentials to a root-only file
+# ------------------------------------------------------------------------------
+CREDS_FILE="/root/.vps-setup-credentials"
+cat > "$CREDS_FILE" <<EOF
+# Generated by vps-secure-setup on $(date)
+username = ${username}
+password = ${password}
+vps_ip   = ${VPS_IP}
 EOF
-    systemctl restart fail2ban || service fail2ban restart
-    log_success "Fail2ban SSH protection configured."
-fi
+chmod 600 "$CREDS_FILE"
 
 # ------------------------------------------------------------------------------
-# 8. Setup Complete & Output Credentials
+# 8. Done — print connection guide
 # ------------------------------------------------------------------------------
-echo "--------------------------------------------------"
-log_success "Secure VPS setup is complete!"
-echo "--------------------------------------------------"
-echo -e "${YELLOW}Please save these credentials securely:${NC}"
-echo -e "Username:  ${GREEN}$username${NC}"
-echo -e "Password:  ${GREEN}$password${NC}"
-echo -e "VPS IP:    ${GREEN}$VPS_IP${NC}"
-if [[ -n "$domain_name" ]]; then
-echo -e "Domain:    ${GREEN}$domain_name${NC}"
-fi
-echo "--------------------------------------------------"
-
-echo -e "${BLUE}=== Local Connection Guide ===${NC}"
-echo "To log in from your local machine, use one of the following:"
 echo
-
-if [[ -n "$domain_name" ]]; then
-    echo -e "Option A: Connect via Domain Name (once DNS A record points to $VPS_IP)"
-    echo -e "  ${GREEN}ssh -i /path/to/private_key $username@$domain_name${NC}"
-    echo
-fi
-
-echo -e "Option B: Connect via IP Address"
-echo -e "  ${GREEN}ssh -i /path/to/private_key $username@$VPS_IP${NC}"
+echo "--------------------------------------------------"
+log_success "Secure VPS setup complete!"
+echo "--------------------------------------------------"
+echo -e "${YELLOW}Credentials saved to: ${GREEN}${CREDS_FILE}${NC} (root-readable only)"
+echo -e "Username : ${GREEN}${username}${NC}"
+echo -e "VPS IP   : ${GREEN}${VPS_IP}${NC}"
 echo
-echo -e "Option C: Setup local SSH Config for quick access"
-echo -e "Add this snippet to your local machine's file ${YELLOW}~/.ssh/config${NC}:"
-echo -e "--------------------------------------------------"
+echo -e "${BLUE}=== How to connect ===${NC}"
+echo -e "  ${GREEN}ssh -i /path/to/private_key ${username}@${VPS_IP}${NC}"
+echo
+echo -e "Or add to your local ${YELLOW}~/.ssh/config${NC}:"
 cat <<EOF
-Host ${domain_name:-my-vps}
-    HostName ${domain_name:-$VPS_IP}
-    User $username
-    IdentityFile ~/.ssh/id_rsa  # <-- Replace with your actual private key path
+Host my-vps
+    HostName ${VPS_IP}
+    User ${username}
+    IdentityFile ~/.ssh/id_ed25519
 EOF
-echo -e "--------------------------------------------------"
-echo -e "Once added, you can connect simply by typing:"
-echo -e "  ${GREEN}ssh ${domain_name:-my-vps}${NC}"
-echo "--------------------------------------------------"
-echo -e "${RED}IMPORTANT WARNING:${NC}"
-echo -e "${YELLOW}DO NOT close your current active root session!${NC}"
-echo -e "1. Open a new terminal window on your local machine."
-echo -e "2. Test connecting to the new user using one of the options above."
-echo -e "3. Verify you can run sudo commands (e.g., run '${GREEN}sudo -i${NC}' or '${GREEN}sudo apt update${NC}')."
-echo -e "Only close this root session after confirming you can successfully connect and use sudo."
+echo
+echo -e "${RED}⚠  WARNING:${NC} ${YELLOW}Do NOT close this root session yet!${NC}"
+echo    "  1. Open a new terminal and test: ssh -i /path/to/key ${username}@${VPS_IP}"
+echo    "  2. Verify sudo works: sudo -i"
+echo    "  3. Only close this session once you have confirmed access."
 echo "--------------------------------------------------"

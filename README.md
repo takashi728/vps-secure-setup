@@ -1,7 +1,7 @@
 <h1 align="center">🛡️ Secure VPS Setup</h1>
 
 <p align="center">
-  <strong>Automated initialization and security hardening for fresh Linux VPS instances.</strong>
+  <strong>Minimal, focused hardening script for a fresh Linux VPS — no bloat, no surprises.</strong>
 </p>
 
 <p align="center">
@@ -11,83 +11,109 @@
 
 ---
 
-## ✨ Features
+## 🎯 Scope
 
-This script provides a production-ready baseline for any new server by automating the following:
+This script covers **one job**: bootstrap a secure non-root user on a fresh VPS and lock down SSH. Firewall configuration (UFW / firewalld) is intentionally out of scope and handled separately.
 
-- 📦 **System Updates**: Automatically updates and upgrades system packages.
-- 👤 **Secure User Creation**: Generates a cryptographically secure 20-character password and provisions a non-root user with `sudo` access.
-- 🔑 **Seamless SSH Key Migration**: Copies your `root` SSH authorized keys directly to the new user.
-- 🔒 **SSH Hardening**: Disables `root` SSH logins, disables password-based authentication, and enforces key-only access to prevent brute-force attacks.
-- 🛡️ **Intrusion Protection**: Configures `fail2ban` to automatically jail IPs exhibiting malicious SSH brute-force behavior.
-- 🌐 **Domain & Hostname Config**: Automatically binds your chosen domain name to the VPS hostname.
+**What it does:**
+- Creates a non-root sudo user with a randomly generated, cryptographically secure 20-character password.
+- Copies `root`'s `authorized_keys` to the new user so the **same SSH key** continues to work.
+- Hardens SSH: disables root login and all password-based authentication.
+- Installs and enables `fail2ban` with its default configuration.
+
+**What it does NOT do:**
+- Configure a firewall (handle this yourself with UFW or firewalld after setup).
+- Set up a hostname or domain name.
+- Modify swap, cron jobs, or unattended upgrades.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Workflow
 
-### 1. Execute on your VPS
+### Step 1 — First login & full system update
 
-Run the following command as `root` on your fresh VPS. You can download and run it directly:
+SSH in as root using your key, update everything including the kernel, then reboot:
 
 ```bash
-# SSH into your server as root
-ssh root@<vps-ip>
+ssh -i /path/to/private_key root@<vps-ip>
+```
 
-# Download and execute
+```bash
+apt-get update && apt-get dist-upgrade -y && reboot
+```
+
+### Step 2 — SSH back in as root
+
+```bash
+ssh -i /path/to/private_key root@<vps-ip>
+```
+
+### Step 3 — Download and run the setup script
+
+```bash
 curl -sO https://raw.githubusercontent.com/takashi728/vps-secure-setup/main/setup.sh
 chmod +x setup.sh
 ./setup.sh
 ```
 
-### 2. Follow the Prompts
-The interactive script will ask you to:
-1. Provide a **username** (defaults to `vpsadmin`).
-2. Auto-generate a **secure password** or enter your own.
-3. Provide a **domain name** (optional).
-
-### 3. Verify Connection (CRITICAL ⚠️)
-
-> **IMPORTANT:** Do **NOT** close your active root SSH session immediately! If there is a configuration error, closing the session may lock you out of your server permanently.
-
-Open a **new terminal window** on your local machine and verify you can connect as the new user:
-
-```bash
-# Connect via IP
-ssh -i /path/to/private_key new_username@<vps-ip>
-
-# OR Connect via Domain (if DNS is configured)
-ssh -i /path/to/private_key new_username@yourdomain.com
-```
-
-Once logged in, verify `sudo` access:
-```bash
-sudo -i
-```
-*(Enter the password provided by the script).* Once successful, it is safe to close your original root session.
+The script will prompt for a username (default: `vpsadmin`) and take care of the rest.
 
 ---
 
-## 💻 Local SSH Configuration (Bonus)
+## ✅ After the Script
 
-To avoid typing long SSH commands every time, you can add a shortcut to your local machine's SSH config.
+> **⚠️ Do NOT close your active root session until you verify the new user works.**
 
-Add this block to your `~/.ssh/config` file:
+Open a **new terminal** and test the new user:
+
+```bash
+# Same key as root, new username
+ssh -i /path/to/private_key <new_username>@<vps-ip>
+```
+
+Verify sudo access:
+
+```bash
+sudo -i
+```
+
+The generated password is saved to `/root/.vps-setup-credentials` (root-readable only). Retrieve it with:
+
+```bash
+cat /root/.vps-setup-credentials
+```
+
+Once access is confirmed, it is safe to close the root session.
+
+---
+
+## 💻 Optional: Local SSH Config Shortcut
+
+Add this to your local `~/.ssh/config` for quick access:
 
 ```ssh
 Host my-vps
-    HostName <vps-ip-or-domain>
+    HostName <vps-ip>
     User <new_username>
-    IdentityFile ~/.ssh/id_rsa  # Update with your actual private key path
+    IdentityFile ~/.ssh/id_ed25519
 ```
 
-Now you can connect simply by typing:
+Then connect simply with:
+
 ```bash
 ssh my-vps
 ```
 
 ---
 
-<p align="center">
-  <i>Built with security and simplicity in mind.</i>
-</p>
+## 🔒 Next Steps (Manual)
+
+After verifying your new user session, consider:
+
+1. **Firewall** — Configure UFW or firewalld to restrict open ports.
+2. **Unattended upgrades** — `apt-get install unattended-upgrades`
+3. **SSH port change** — Optionally move SSH off port 22 in `/etc/ssh/sshd_config`.
+
+---
+
+<p align="center"><i>Built with security and simplicity in mind.</i></p>
